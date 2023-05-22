@@ -125,6 +125,46 @@ class ProblemReport(collections.UserDict):
         new_tags = current_tags.union(tags)
         self["Tags"] = " ".join(sorted(new_tags))
 
+    def _check_can_split(
+        self, line: typing.BinaryIO
+    ) -> (typing.BinaryIO, typing.BinaryIO):
+        try:
+            (key, value) = line.split(b":", 1)
+            return key, value
+
+        except ValueError:
+            raise MalformedProblemReport(
+                f"Line {line.decode(errors='backslashreplace')!r}"
+                f" does not contain a colon for separating"
+                f" the key from the value"
+            ) from None
+
+    def _check_can_decode(self, key: typing.BinaryIO) -> typing.BinaryIO:
+        try:
+            key = key.decode("ASCII")
+            return key
+
+        except UnicodeDecodeError as error:
+            raise MalformedProblemReport(str(error)) from None
+
+    def _preprocess_value(
+        self,
+        key: typing.BinaryIO,
+        value: typing.BinaryIO,
+        b64_block: bool,
+        binary: typing.Union[str, bool],
+    ) -> (typing.BinaryIO, bool):
+        value = value.strip()
+        if value == b"base64":
+            if binary == "compressed":
+                value = CompressedValue(key.encode())
+                value.gzipvalue = b""
+            else:
+                value = b""
+            b64_block = True
+
+        return value, b64_block
+
     def load(self, file, binary=True, key_filter=None):
         # TODO: Split into smaller functions/methods
         # pylint: disable=too-many-branches,too-many-nested-blocks
@@ -190,26 +230,13 @@ class ProblemReport(collections.UserDict):
                     else:
                         self.data[key] = self._try_unicode(value)
 
-                try:
-                    (key, value) = line.split(b":", 1)
-                except ValueError:
-                    raise MalformedProblemReport(
-                        f"Line {line.decode(errors='backslashreplace')!r}"
-                        f" does not contain a colon for separating"
-                        f" the key from the value"
-                    ) from None
-                try:
-                    key = key.decode("ASCII")
-                except UnicodeDecodeError as error:
-                    raise MalformedProblemReport(str(error)) from None
-                value = value.strip()
-                if value == b"base64":
-                    if binary == "compressed":
-                        value = CompressedValue(key.encode())
-                        value.gzipvalue = b""
-                    else:
-                        value = b""
-                    b64_block = True
+                key, value = self._check_can_split(line)
+
+                key = self._check_can_decode(key)
+
+                value, b64_block = self._preprocess_value(
+                    key, value, b64_block, binary
+                )
 
         if key is not None:
             self.data[key] = self._try_unicode(value)
